@@ -123,34 +123,11 @@ def require_auth(f):
 
 @app.route('/')
 def index():
-    """Главная страница TMA с проверкой подписи"""
-    telegram_data = request.args.get('tgWebAppData')
-    
-    if not telegram_data:
-        # Для разработки можно отключить проверку, но в проде — обязательно
-        if os.getenv('DEBUG', 'false').lower() == 'true':
-            logger.warning("DEBUG mode: skipping initData verification")
-            return render_template('tma.html', user_id=12345, username="debug_user")
-        return abort(403, description="Ошибка: не переданы данные Telegram")
-    
-    # Проверяем подпись
-    user_data = verify_telegram_init_data(telegram_data)
-    if not user_data:
-        logger.warning("Failed to verify Telegram initData")
-        return abort(403, description="Ошибка проверки подписи Telegram")
-    
-    user_id = user_data.get('id')
-    username = user_data.get('username', '')
-    
-    if not user_id:
-        return abort(400, description="Некорректные данные пользователя")
-    
-    logger.info(f"TMA access: user_id={user_id}, username={username}")
-    
-    # Сохраняем/обновляем пользователя
-    get_user(user_id, username)
-    
-    return render_template('tma.html', user_id=user_id, username=escape_html(username))
+    """Главная страница TMA (без проверки Telegram для тестирования)"""
+    # УБИРАЕМ ОГРАНИЧЕНИЕ TELEGRAM
+    # Тестовый режим - всегда разрешаем доступ
+    logger.info("TMA accessed without Telegram check")
+    return render_template('tma.html', user_id=12345, username="test_user")
 
 @app.route('/api/prices')
 @require_auth
