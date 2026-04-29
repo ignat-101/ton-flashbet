@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: ton-flashbet-tma
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn tma:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_WALLET_ADDRESS
+        sync: false
+      - key: TON_API_KEY
+        sync: false
+      - key: TON_API_ENDPOINT
+        value: https://toncenter.com/api/v2/jsonRPC
+      - key: BOT_USERNAME
+        value: FlashBetTON_bot
+      - key: TMA_URL
+        value: https://ton-flashbet-tma.onrender.com/
+      - key: FLASK_SECRET
+        generateValue: true
+      - key: DEBUG
+        value: false
+
+  - type: web
+    name: ton-flashbet-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_WALLET_ADDRESS
+        sync: false
+      - key: TON_API_KEY
+        sync: false
+      - key: BOT_USERNAME
+        value: FlashBetTON_bot
+      - key: TMA_URL
+        value: https://ton-flashbet-tma.onrender.com/
+      - key: DEBUG
+        value: false

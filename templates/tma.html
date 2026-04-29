@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://telegram.org; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline';">
+    <title>TON FlashBet</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin:0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2em;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .price-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .price-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .price-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .up { color: #4ade80; }
+        .down { color: #f87171; }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background: #999;
+            cursor: not-allowed;
+            transform: none;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 1em;
+            margin-top: 10px;
+            box-sizing: border-box;
+        }
+        input::placeholder, textarea::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .bet-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .error {
+            background: rgba(255, 0, 0, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .success {
+            background: rgba(0, 255, 0, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎲 TON FlashBet</h1>
+        
+        <div class="card">
+            <h2>📊 Цены криптовалют</h2>
+            <div class="price-grid" id="prices">
+                <div class="price-item">Загрузка...</div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>🔥 Создать ставку</h2>
+            <input type="number" id="betAmount" placeholder="Сумма (TON)" step="0.1" min="0.1" max="1000">
+            <input type="text" id="opponentTag" placeholder="Опонент (@username)">
+            <textarea id="betCondition" placeholder="Условие ставки" rows="3" maxlength="500"></textarea>
+            <button onclick="createBet()" id="createBetBtn">Создать ставку</button>
+            <div id="betMessage"></div>
+        </div>
+        
+        <div class="card">
+            <h2>🎲 Активные ставки</h2>
+            <div id="betsList">Загрузка...</div>
+        </div>
+    </div>
+    
+    <script>
+        let userId = null;
+        let username = null;
+        let initData = null;
+        
+        // Инициализация Telegram WebApp
+        if (window.Telegram && Telegram.WebApp) {
+            Telegram.WebApp.ready();
+            initData = Telegram.WebApp.initData;
+            const user = Telegram.WebApp.initDataUnsafe.user;
+            
+            if (user) {
+                userId = user.id;
+                username = user.username || '';
+            }
+            
+            // Настройка темы
+            document.body.style.backgroundColor = Telegram.WebApp.backgroundColor || '#667eea';
+        }
+        
+        // Функция для API запросов с авторизацией
+        async function apiRequest(url, options = {}) {
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+            
+            // Добавляем initData в заголовки для авторизации
+            if (initData) {
+                headers['X-Telegram-Init-Data'] = initData;
+            }
+            
+            const response = await fetch(url, {
+                ...options,
+                headers: headers
+            });
+            
+            if (response.status === 401) {
+                throw new Error('Ошибка авторизации. Пожалуйста, перезапустите приложение.');
+            }
+            
+            return response;
+        }
+        
+        // Загрузка цен
+        async function loadPrices() {
+            try {
+                const response = await apiRequest('/api/prices');
+                const prices = await response.json();
+                
+                const pricesDiv = document.getElementById('prices');
+                pricesDiv.innerHTML = '';
+                
+                for (const [symbol, data] of Object.entries(prices)) {
+                    const div = document.createElement('div');
+                    div.className = 'price-item';
+                    const changePercent = data.change_percent || 0;
+                    div.innerHTML = `
+                        <strong>${symbol.toUpperCase()}</strong>
+                        <div class="price-value">$${data.price}</div>
+                        <div class="${data.direction === 'up' ? 'up' : 'down'}">
+                            ${data.direction === 'up' ? '🔥' : '❄️'} ${changePercent > 0 ? '+' : ''}${changePercent.toFixed(2)}%
+                        </div>
+                    `;
+                    pricesDiv.appendChild(div);
+                }
+            } catch (error) {
+                console.error('Error loading prices:', error);
+            }
+        }
+        
+        // Загрузка ставок
+        async function loadBets() {
+            try {
+                const response = await apiRequest('/api/bets');
+                const bets = await response.json();
+                
+                const betsDiv = document.getElementById('betsList');
+                if (bets.length === 0) {
+                    betsDiv.innerHTML = '<p>Нет активных ставок</p>';
+                    return;
+                }
+                
+                betsDiv.innerHTML = '';
+                bets.forEach(bet => {
+                    const div = document.createElement('div');
+                    div.className = 'bet-item';
+                    div.innerHTML = `
+                        <strong>${escapeHtml(bet.condition)}</strong><br>
+                        💰 ${bet.amount} TON<br>
+                        <span class="status">${escapeHtml(bet.status)}</span>
+                    `;
+                    betsDiv.appendChild(div);
+                });
+            } catch (error) {
+                console.error('Error loading bets:', error);
+            }
+        }
+        
+        // Создание ставки
+        async function createBet() {
+            if (!userId) {
+                showMessage('Ошибка: не удалось получить данные пользователя', 'error');
+                return;
+            }
+            
+            const amount = document.getElementById('betAmount').value;
+            const opponent = document.getElementById('opponentTag').value;
+            const condition = document.getElementById('betCondition').value;
+            
+            if (!amount || !condition) {
+                showMessage('Заполните все поля', 'error');
+                return;
+            }
+            
+            if (parseFloat(amount) < 0.1 || parseFloat(amount) > 1000) {
+                showMessage('Сумма должна быть от 0.1 до 1000 TON', 'error');
+                return;
+            }
+            
+            if (condition.length > 500) {
+                showMessage('Условие слишком длинное (макс 500 символов)', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('createBetBtn');
+            btn.disabled = true;
+            btn.textContent = 'Создание...';
+            
+            try {
+                const response = await apiRequest('/api/bets/create', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        user_id: userId,
+                        amount: amount,
+                        opponent_tag: opponent,
+                        condition: condition
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showMessage('Ставка создана! ID: ' + result.bet_id, 'success');
+                    document.getElementById('betAmount').value = '';
+                    document.getElementById('opponentTag').value = '';
+                    document.getElementById('betCondition').value = '';
+                    loadBets();
+                } else {
+                    showMessage('Ошибка: ' + (result.error || 'Unknown'), 'error');
+                }
+            } catch (error) {
+                showMessage('Ошибка создания ставки: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Создать ставку';
+            }
+        }
+        
+        // Вспомогательные функции
+        function showMessage(text, type) {
+            const msgDiv = document.getElementById('betMessage');
+            msgDiv.className = type;
+            msgDiv.textContent = text;
+            setTimeout(() => {
+                msgDiv.textContent = '';
+                msgDiv.className = '';
+            }, 5000);
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Автообновление
+        loadPrices();
+        loadBets();
+        setInterval(loadPrices, 60000); // Обновление цен каждую минуту
+        setInterval(loadBets, 30000); // Обновление ставок каждые 30 сек
+    </script>
+</body>
+</html>
