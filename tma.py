@@ -329,6 +329,7 @@ if __name__ == '__main__':
     if not os.path.exists(templates_dir):
         os.makedirs(templates_dir)
     
-    # В продакшене используйте gunicorn, а не debug=True
+    # Render требует порт из переменной PORT
+    port = int(os.getenv('PORT', 5000))
     debug_mode = os.getenv('DEBUG', 'false').lower() == 'true'
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=debug_mode)
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
