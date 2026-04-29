@@ -1,48 +1,24 @@
 services:
   - type: web
-    name: ton-flashbet-tma
+    name: ton-flashbet
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python tma.py"
+    buildCommand: "chmod +x run.sh && pip install -r requirements.txt"
+    startCommand: "bash run.sh"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11.0"
       - key: BOT_TOKEN
-        sync: false
+        value: "YOUR_BOT_TOKEN_HERE"  # Заменить в Render Dashboard
       - key: BOT_WALLET_ADDRESS
-        sync: false
-      - key: TON_API_KEY
-        sync: false
+        value: "YOUR_WALLET_ADDRESS_HERE"  # Заменить в Render Dashboard
       - key: TON_API_ENDPOINT
-        value: https://toncenter.com/api/v2/jsonRPC
+        value: "https://toncenter.com/api/v2/jsonRPC"
       - key: BOT_USERNAME
-        value: FlashBetTON_bot
+        value: "FlashBetTON_bot"
       - key: TMA_URL
-        value: https://ton-flashbet-tma.onrender.com/
+        value: "https://ton-flashbet.onrender.com/"  # Будет доступно после деплоя
       - key: FLASK_SECRET
-        generateValue: true
+        value: "CHANGE_THIS_RANDOM_SECRET"
       - key: DEBUG
-        value: false
-
-  - type: web
-    name: ton-flashbet-bot
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python bot.py"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: BOT_TOKEN
-        sync: false
-      - key: BOT_WALLET_ADDRESS
-        sync: false
-      - key: TON_API_KEY
-        sync: false
-      - key: BOT_USERNAME
-        value: FlashBetTON_bot
-      - key: TMA_URL
-        value: https://ton-flashbet-tma.onrender.com/
-      - key: DEBUG
-        value: false
+        value: "false"
