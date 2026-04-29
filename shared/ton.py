@@ -274,3 +274,80 @@ def get_5min_price_change(symbol: str) -> Optional[Dict]:
         'timestamp': time.time(),
         'note': 'MVP: 5min change is estimated, not real historical data'
     }
+
+
+def verify_ton_connect_payload(payload: dict, wallet_address: str) -> bool:
+    """
+    Проверка payload от TON Connect.
+    Упрощенная проверка - в продакшене нужна полная валидация подписи.
+    """
+    try:
+        # Проверяем, что адрес в payload совпадает с ожидаемым
+        if 'address' in payload:
+            return payload['address'] == wallet_address
+        return False
+    except Exception as e:
+        logger.error(f"TON Connect verification error: {e}")
+        return False
+
+
+def send_ton_transaction(wallet_address: str, recipient: str, amount: float, payload: str = "") -> Optional[str]:
+    """
+    Отправка TON транзакции.
+    ВНИМАНИЕ: Это заглушка. В реальности транзакция подписывается кошельком пользователя через TON Connect.
+    Функция нужна для справки - реальная отправка происходит на стороне клиента.
+    """
+    logger.info(f"Transaction request: {amount} TON from {wallet_address} to {recipient}")
+    logger.warning("Real transaction must be signed by user's wallet via TON Connect")
+    return None
+
+
+def get_wallet_transactions(wallet_address: str, limit: int = 10) -> list:
+    """
+    Получение истории транзакций кошелька.
+    """
+    if not wallet_address:
+        return []
+    
+    if not ton_rate_limiter.can_call():
+        return []
+    
+    try:
+        ton_rate_limiter.record_call()
+        
+        headers = {}
+        if TON_API_KEY:
+            headers['X-API-Key'] = TON_API_KEY
+        
+        # Запрос транзакций через TON API
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "getTransactions",
+            "params": {
+                "address": wallet_address,
+                "limit": limit
+            },
+            "id": 1
+        }
+        
+        r = requests.post(TON_API_ENDPOINT, json=payload, headers=headers, timeout=10)
+        
+        if r.status_code == 200:
+            data = r.json()
+            if 'result' in data and data['result']:
+                transactions = []
+                for tx in data['result'][:limit]:
+                    transactions.append({
+                        'hash': tx.get('transaction_id', ''),
+                        'from': tx.get('from', ''),
+                        'to': tx.get('to', ''),
+                        'value': float(tx.get('value', 0)) / 1e9,
+                        'timestamp': tx.get('utime', 0),
+                        'fee': float(tx.get('fee', 0)) / 1e9
+                    })
+                return transactions
+        
+    except Exception as e:
+        logger.error(f"Error getting transactions for {wallet_address}: {e}")
+    
+    return []

@@ -22,7 +22,7 @@ from shared.db import (
     get_treasury, update_treasury, add_treasury_transaction,
     get_referral_info, save_referral_info, validate_user_id, validate_amount
 )
-from shared.ton import get_crypto_price, get_5min_price_change, get_ton_balance
+from shared.ton import get_crypto_price, get_5min_price_change, get_ton_balance, verify_ton_transaction
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET', os.urandom(24).hex())
@@ -158,6 +158,12 @@ def get_bets():
     
     for bet_id, bet in db['bets'].items():
         if bet['status'] in ['active', 'pending', 'awaiting_payment', 'claim_pending', 'disputed']:
+            # Calculate market probability based on bets
+            total_yes = bet.get('total_yes_amount', 0)
+            total_no = bet.get('total_no_amount', 0)
+            total = total_yes + total_no
+            market_probability = (total_yes / total * 100) if total > 0 else 50.0
+            
             bets.append({
                 'id': bet_id,
                 'condition': escape_html(bet['condition']),
@@ -165,7 +171,12 @@ def get_bets():
                 'status': escape_html(bet['status']),
                 'created_at': bet['created_at'],
                 'initiator': bet['initiator'],
-                'opponent': bet.get('opponent')
+                'opponent': bet.get('opponent'),
+                'probability': float(bet.get('probability', 50)),
+                'market_probability': round(market_probability, 1),
+                'oracle_status': bet.get('oracle_status', 'pending'),
+                'total_yes_amount': total_yes,
+                'total_no_amount': total_no
             })
     
     return jsonify(bets)
@@ -217,8 +228,26 @@ def create_bet():
             'stake_returned': {},
             'auditors': [],
             'auditor_votes': {},
-            'suspect_voters': []
+            'suspect_voters': [],
+            # Новые поля для торговли вероятностями
+            'probability': 50.0,  # Начальная вероятность
+            'market_probability': 50.0,
+            'total_yes_amount': 0.0,
+            'total_no_amount': 0.0,
+            'trades': [],  # История торгов
+            'oracle_status': 'pending',  # pending, checking, success, failed
+            'oracle_condition': None  # Условие для проверки оракулом
         }
+        
+        # Если ставка на цену криптовалюты, добавляем oracle_condition
+        import re
+        price_pattern = r'(btc|bitcoin|eth|ethereum|sol|solana|ton|toncoin).*?(\d+[kmb]?|\d+\.?\d*)'  
+        match = re.search(price_pattern, condition.lower())
+        if match:
+            crypto = match.group(1)
+            price_target = match.group(2)
+            new_bet['oracle_condition'] = f"{crypto.upper()} > {price_target}"
+            new_bet['oracle_status'] = 'checking'
         
         if not save_bet(new_bet):
             return jsonify({'error': 'Failed to save bet'}), 500
@@ -246,10 +275,14 @@ def get_profile():
     referral_info = get_referral_info(user_id)
     treasury = get_treasury()
     
+    # Добавляем информацию о кошельке
+    wallet_address = user.get('wallet_address', None)
+    
     return jsonify({
         'user': user,
         'referral': referral_info,
-        'treasury_balance': treasury.get('balance', 0)
+        'treasury_balance': treasury.get('balance', 0),
+        'wallet_address': wallet_address
     })
 
 @app.route('/api/referral/generate')
@@ -275,6 +308,237 @@ def generate_referral():
         'link': referral_link
     })
 
+# Новые эндпоинты для торговли и кошелька
+
+@app.route('/api/trade', methods=['POST'])
+@require_auth
+def trade_bet():
+    """Торговля долями ставок (как на Polymarket)"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data'}), 400
+        
+        bet_id = data.get('bet_id')
+        amount = data.get('amount')
+        side = data.get('side', 'yes')  # 'yes' or 'no'
+        user_id = request.telegram_user.get('id')
+        
+        if not bet_id or not amount:
+            return jsonify({'error': 'Missing bet_id or amount'}), 400
+        
+        amount_float = float(amount)
+        if amount_float < 0.1:
+            return jsonify({'error': 'Minimum trade amount is 0.1 TON'}), 400
+        
+        db = load_db()
+        bet = db['bets'].get(bet_id)
+        if not bet:
+            return jsonify({'error': 'Bet not found'}), 404
+        
+        if bet['status'] not in ['active', 'pending']:
+            return jsonify({'error': 'Bet is not active for trading'}), 400
+        
+        # Update bet totals based on trade side
+        if side == 'yes':
+            bet['total_yes_amount'] = bet.get('total_yes_amount', 0) + amount_float
+        else:
+            bet['total_no_amount'] = bet.get('total_no_amount', 0) + amount_float
+        
+        # Recalculate market probability
+        total_yes = bet.get('total_yes_amount', 0)
+        total_no = bet.get('total_no_amount', 0)
+        total = total_yes + total_no
+        if total > 0:
+            bet['market_probability'] = (total_yes / total) * 100
+        
+        # Add trade to history
+        trade_record = {
+            'user_id': user_id,
+            'amount': amount_float,
+            'side': side,
+            'timestamp': time.time(),
+            'probability_at_time': bet.get('market_probability', 50)
+        }
+        if 'trades' not in bet:
+            bet['trades'] = []
+        bet['trades'].append(trade_record)
+        
+        save_db(db)
+        
+        logger.info(f"Trade placed: {bet_id} by user {user_id}: {side} {amount_float} TON")
+        return jsonify({
+            'success': True,
+            'market_probability': round(bet['market_probability'], 1),
+            'total_yes_amount': bet['total_yes_amount'],
+            'total_no_amount': bet['total_no_amount']
+        })
+        
+    except Exception as e:
+        logger.error(f"Error trading: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/wallet/connect', methods=['POST'])
+@require_auth
+def connect_wallet():
+    """Подключение TON кошелька к профилю"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data'}), 400
+        
+        wallet_address = data.get('wallet_address')
+        user_id = request.telegram_user.get('id')
+        
+        if not wallet_address or not isinstance(wallet_address, str):
+            return jsonify({'error': 'Invalid wallet address'}), 400
+        
+        # Validate TON address format (simplified)
+        if not wallet_address.startswith('EQ') and not wallet_address.startswith('UQ'):
+            return jsonify({'error': 'Invalid TON address format'}), 400
+        
+        # Update user's wallet address
+        db = load_db()
+        uid = str(user_id)
+        
+        if uid not in db['users']:
+            return jsonify({'error': 'User not found'}), 404
+        
+        db['users'][uid]['wallet_address'] = wallet_address
+        save_db(db)
+        
+        logger.info(f"Wallet connected: {wallet_address} to user {user_id}")
+        return jsonify({'success': True, 'wallet_address': wallet_address})
+        
+    except Exception as e:
+        logger.error(f"Error connecting wallet: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/wallet/balance')
+@require_auth
+def get_wallet_balance():
+    """Получение баланса кошелька"""
+    try:
+        address = request.args.get('address')
+        
+        if not address:
+            # Try to get from user profile
+            user_id = request.telegram_user.get('id')
+            db = load_db()
+            user = db['users'].get(str(user_id))
+            if user:
+                address = user.get('wallet_address')
+        
+        if not address:
+            return jsonify({'error': 'Wallet address not found'}), 400
+        
+        balance = get_ton_balance(address)
+        
+        return jsonify({
+            'address': address,
+            'balance': round(balance, 4)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting wallet balance: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/wallet/disconnect', methods=['POST'])
+@require_auth
+def disconnect_wallet():
+    """Отключение кошелька"""
+    try:
+        user_id = request.telegram_user.get('id')
+        
+        db = load_db()
+        uid = str(user_id)
+        
+        if uid in db['users']:
+            db['users'][uid]['wallet_address'] = None
+            save_db(db)
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Error disconnecting wallet: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/oracle/check', methods=['POST'])
+@require_auth
+def oracle_check():
+    """Проверка условия ставки через оракул (CoinGecko)"""
+    try:
+        data = request.json
+        bet_id = data.get('bet_id')
+        
+        if not bet_id:
+            return jsonify({'error': 'Missing bet_id'}), 400
+        
+        db = load_db()
+        bet = db['bets'].get(bet_id)
+        if not bet:
+            return jsonify({'error': 'Bet not found'}), 404
+        
+        if not bet.get('oracle_condition'):
+            return jsonify({'error': 'No oracle condition set'}), 400
+        
+        # Parse oracle condition
+        condition = bet['oracle_condition']  # e.g., "BTC > 100000"
+        import re
+        match = re.match(r'(\w+)\s*([><]=?)\s*([\d.]+)', condition)
+        
+        if not match:
+            return jsonify({'error': 'Invalid oracle condition format'}), 400
+        
+        crypto = match.group(1).lower()
+        operator = match.group(2)
+        target_price = float(match.group(3))
+        
+        # Get current price
+        price_data = get_crypto_price(crypto)
+        if not price_data:
+            return jsonify({'error': 'Failed to get price data'}), 500
+        
+        current_price = price_data['price']
+        
+        # Check condition
+        condition_met = False
+        if operator == '>':
+            condition_met = current_price > target_price
+        elif operator == '>=':
+            condition_met = current_price >= target_price
+        elif operator == '<':
+            condition_met = current_price < target_price
+        elif operator == '<=':
+            condition_met = current_price <= target_price
+        
+        # Update bet status
+        bet['oracle_status'] = 'success' if condition_met else 'failed'
+        bet['oracle_last_check'] = time.time()
+        bet['oracle_current_price'] = current_price
+        
+        if condition_met:
+            bet['status'] = 'completed'
+            bet['winner'] = bet['initiator']  # Simplified - should determine actual winner
+        
+        save_db(db)
+        
+        return jsonify({
+            'success': True,
+            'condition_met': condition_met,
+            'current_price': current_price,
+            'oracle_status': bet['oracle_status']
+        })
+        
+    except Exception as e:
+        logger.error(f"Oracle check error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
 @app.route('/api/treasury')
 @require_auth
 def get_treasury_info():
@@ -299,6 +563,19 @@ def forbidden(e):
 @app.errorhandler(400)
 def bad_request(e):
     return jsonify({'error': 'Bad Request', 'message': str(e.description)}), 400
+
+# Serve TON Connect manifest
+@app.route('/tonconnect-manifest.json')
+def tonconnect_manifest():
+    """Manifest for TON Connect"""
+    return jsonify({
+        "url": request.host_url.rstrip('/'),
+        "name": "TON FlashBet",
+        "iconUrl": f"{request.host_url}static/icon.png",
+        "termsOfUseUrl": f"{request.host_url}terms",
+        "privacyPolicyUrl": f"{request.host_url}privacy"
+    })
+
 
 if __name__ == '__main__':
     # Создаем директорию templates если её нет
