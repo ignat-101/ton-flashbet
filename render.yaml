@@ -9,15 +9,15 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.0"
       - key: BOT_TOKEN
-        value: "YOUR_BOT_TOKEN_HERE"  # Заменить в Render Dashboard
+        sync: false  # Нужно добавить в Render Dashboard!
       - key: BOT_WALLET_ADDRESS
-        value: "YOUR_WALLET_ADDRESS_HERE"  # Заменить в Render Dashboard
+        sync: false
       - key: TON_API_ENDPOINT
         value: "https://toncenter.com/api/v2/jsonRPC"
       - key: BOT_USERNAME
         value: "FlashBetTON_bot"
       - key: TMA_URL
-        value: "https://ton-flashbet.onrender.com/"  # Будет доступно после деплоя
+        sync: false  # Укажи URL после деплоя, например https://ton-flashbet.onrender.com/
       - key: FLASK_SECRET
         value: "CHANGE_THIS_RANDOM_SECRET"
       - key: DEBUG
